@@ -473,3 +473,63 @@ func translateDirectories(dirs []old.Directory, m map[string]string) (ret []type
 	}
 	return
 }
+
+// RemoveDuplicateFilesAndUnits is a helper function that removes duplicated files/units from spec v2 config.
+// This functionality is not included in the Translate function, but may be useful in cases where
+// configuration needs to be sanitized before translation.
+func RemoveDuplicateFilesAndUnits(cfg old.Config) old.Config {
+	files := cfg.Storage.Files
+	units := cfg.Systemd.Units
+
+	filePathMap := map[string]bool{}
+	var outFiles []old.File
+	for i := len(files) - 1; i >= 0; i-- {
+		// We do not actually support to other filesystems so we make the assumption that there is only 1 here
+		path := files[i].Path
+		if _, isDup := filePathMap[path]; isDup {
+			continue
+		}
+		outFiles = append(outFiles, files[i])
+		filePathMap[path] = true
+	}
+
+	unitNameMap := map[string]bool{}
+	var outUnits []old.Unit
+	for i := len(units) - 1; i >= 0; i-- {
+		unitName := units[i].Name
+		if _, isDup := unitNameMap[unitName]; isDup {
+			// this is a duplicated unit by name, so let's check for the dropins and append them
+			if len(units[i].Dropins) > 0 {
+				for j := range outUnits {
+					if outUnits[j].Name == unitName {
+						// outUnits[j] is the highest priority entry with this unit name
+						// now loop over the new unit's dropins and append it if the name
+						// isn't duplicated in the existing unit's dropins
+						for _, newDropin := range units[i].Dropins {
+							hasExistingDropin := false
+							for _, existingDropins := range outUnits[j].Dropins {
+								if existingDropins.Name == newDropin.Name {
+									hasExistingDropin = true
+									break
+								}
+							}
+							if !hasExistingDropin {
+								outUnits[j].Dropins = append(outUnits[j].Dropins, newDropin)
+							}
+						}
+						continue
+					}
+				}
+			}
+			continue
+		}
+		outUnits = append(outUnits, units[i])
+		unitNameMap[unitName] = true
+	}
+
+	// outFiles and outUnits should now have all duplication removed
+	cfg.Storage.Files = outFiles
+	cfg.Systemd.Units = outUnits
+
+	return cfg
+}
